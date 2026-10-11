@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+app-data.json
+app-data.json.tmp
+app-settings.json
+.app-data-*.tmp
+.app-settings-*.tmp

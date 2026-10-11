@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f8f1">
+  <title>Meadowmount Practice</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/data-settings.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#practice" aria-label="Meadowmount Practice home">
+      <span class="brand-mark" aria-hidden="true">M</span>
+      <span><strong>Meadowmount</strong><small>Practice App</small></span>
+    </a>
+    <nav class="main-nav" aria-label="Main navigation">
+      <button class="nav-button active" data-view="practice">Practice</button>
+      <button class="nav-button" data-view="history">History</button>
+      <button class="nav-button" data-view="library">Pieces &amp; folders</button>
+    </nav>
+    <span class="local-pill"><span></span> Saved on this computer</span>
+  </header>
+
+  <main class="app-shell">
+    <section id="practice-view" class="view active" aria-labelledby="practice-heading">
+      <div class="page-heading">
+        <div><p class="eyebrow">YOUR DAILY PRACTICE</p><h1 id="practice-heading">Find your next passage.</h1><p class="subheading">Choose a piece, then let chance pick a section to work on.</p></div>
+        <button class="button button-secondary" id="go-library">Set up pieces <span aria-hidden="true">→</span></button>
+      </div>
+      <div class="practice-layout">
+        <aside class="piece-rail card">
+          <div class="card-heading"><div><p class="eyebrow">YOUR REPERTOIRE</p><h2>Pieces</h2></div><span class="count-badge" id="piece-count">0</span></div>
+          <div id="piece-list" class="piece-list"><div class="empty-state compact">Add a piece folder to get started.</div></div>
+          <button class="text-button" id="add-piece-shortcut">＋ Add a piece</button>
+        </aside>
+        <section class="score-column" aria-label="Practice section">
+          <div id="score-empty" class="card welcome-card">
+            <div class="welcome-icon" aria-hidden="true">♫</div><p class="eyebrow">A LITTLE PRACTICE, OFTEN</p><h2>Your music, one section at a time.</h2>
+            <p>Add a piece and point it to a folder of PDF, PNG, or JPEG score pages. They stay in their folder; this app keeps track of your practice.</p>
+            <button class="button button-primary" id="empty-add-piece">Configure your first piece</button>
+          </div>
+          <div id="score-workspace" class="hidden">
+            <div class="score-toolbar card">
+              <div class="section-title"><span class="section-icon" aria-hidden="true">♪</span><div><p class="eyebrow" id="selected-piece-name">PIECE</p><h2 id="section-name">Section</h2></div></div>
+              <div class="score-actions"><button class="button button-secondary" id="practice-next" title="Choose another random section">↻ <span>Practice next</span></button><button class="button button-primary" id="open-note">✎ <span>Notes</span></button></div>
+            </div>
+            <div id="score-frame" class="score-frame card" aria-live="polite"></div>
+            <div class="score-caption"><span id="section-path"></span><span id="section-counter"></span></div>
+            <div id="note-editor" class="note-editor card hidden">
+              <div class="note-heading"><div><p class="eyebrow">PRACTICE LOG</p><h2>What did you notice?</h2></div><button class="icon-button" id="close-note" aria-label="Close notes">×</button></div>
+              <p class="note-context" id="note-context"></p>
+              <label class="field-label" for="note-text">Practice note <span>Optional — saving a blank note still records practice.</span></label>
+              <textarea id="note-text" rows="4" maxlength="10000" placeholder="A phrase, a challenge, a small win…"></textarea>
+              <div class="form-footer"><span class="quiet-hint">A history entry is created when you save.</span><button class="button button-primary" id="save-note">Save practice note</button></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="history-view" class="view" aria-labelledby="history-heading">
+      <div class="page-heading"><div><p class="eyebrow">LOOKING BACK</p><h1 id="history-heading">Practice history.</h1><p class="subheading">Each saved note marks a practice session, even when the note is blank.</p></div><button class="button button-secondary" id="export-history">↓ Export history</button></div>
+      <div class="history-tools"><label class="search-box"><span aria-hidden="true">⌕</span><input id="history-search" type="search" placeholder="Search pieces or notes" aria-label="Search practice history"></label><label class="button button-secondary import-button">↑ Import history<input type="file" id="import-history" accept="application/json,.json" hidden></label></div>
+      <div id="history-list" class="history-list"></div>
+    </section>
+
+    <section id="library-view" class="view" aria-labelledby="library-heading">
+      <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC LIBRARY</p><h1 id="library-heading">Pieces &amp; folders.</h1><p class="subheading">Give each piece a name and point it to its local folder of score pages.</p></div><button class="button button-primary" id="new-piece">＋ Add a piece</button></div>
+      <div class="library-notice"><span class="notice-icon" aria-hidden="true">i</span><p><strong>Files stay where they are.</strong> Add the full folder path for each piece. Supported files: PDF, PNG, JPG, JPEG. Piece settings and practice history are stored in your configured app data folder.</p></div>
+      <section class="card data-location-card" aria-labelledby="data-location-heading">
+        <div class="note-heading"><div><p class="eyebrow">LOCAL STORAGE</p><h2 id="data-location-heading">App data folder</h2></div></div>
+        <p class="data-location-current">Current location: <strong id="data-location-current">Loading…</strong></p>
+        <form id="data-location-form">
+          <label class="field-label" for="data-location-path">Change location <span>Choose an existing folder on this computer.</span></label>
+          <div class="data-location-controls"><input id="data-location-path" maxlength="4096" required placeholder="e.g. /Users/you/Library/Mobile Documents/com~apple~CloudDocs/Meadowmount Data"><button class="button button-secondary" type="submit" id="save-data-location">Change folder</button></div>
+            <p class="path-help">Enter the folder path, not the app-data.json filename. Existing app data is copied when possible; if you already moved app-data.json here, the app can use that file. Choose an iCloud Drive folder if you want iCloud to sync this data file.</p>
+        </form>
+      </section>
+      <div id="piece-form-wrap" class="card piece-form-wrap hidden">
+        <div class="note-heading"><div><p class="eyebrow" id="piece-form-eyebrow">NEW PIECE</p><h2 id="piece-form-title">Add a piece</h2></div><button class="icon-button" id="cancel-piece" aria-label="Cancel">×</button></div>
+        <form id="piece-form">
+          <input type="hidden" id="piece-id">
+          <label class="field-label" for="piece-name">Display name</label><input id="piece-name" maxlength="120" required placeholder="e.g. If I Ain’t Got You">
+          <label class="field-label" for="piece-path">Folder path <span>Absolute local path to this piece’s folder.</span></label><input id="piece-path" required maxlength="4096" placeholder="e.g. /Users/you/Music/If I Ain’t Got You">
+          <p class="path-help">Tip: In Finder, select the folder and use Option-click → Copy “…” as Pathname.</p>
+          <div class="form-footer"><button type="button" class="button button-secondary" id="cancel-piece-secondary">Cancel</button><button type="submit" class="button button-primary" id="save-piece">Save piece</button></div>
+        </form>
+      </div>
+      <div id="library-list" class="library-list"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
