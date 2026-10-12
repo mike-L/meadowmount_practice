@@ -44,7 +44,7 @@
           <div id="score-workspace" class="hidden">
             <div class="score-toolbar card">
               <div class="section-title"><span class="section-icon" aria-hidden="true">♪</span><div><p class="eyebrow" id="selected-piece-name">PIECE</p><h2 id="section-name">Section</h2></div></div>
-              <div class="score-actions"><button class="button button-secondary" id="practice-next" title="Choose another random section">↻ <span>Practice next</span></button><button class="button button-primary" id="open-note">✎ <span>Notes</span></button></div>
+              <div class="score-actions"><button class="button button-secondary" id="practice-next" title="Choose another random section">↻ <span>Practice next</span></button><button class="button button-secondary" id="log-and-next" title="Log this passage with a blank note, then choose another">✓ <span>Log passage and practice next</span></button><button class="button button-primary" id="open-note">✎ <span>Notes</span></button></div>
             </div>
             <div id="score-frame" class="score-frame card" aria-live="polite"></div>
             <div class="score-caption"><span id="section-path"></span><span id="section-counter"></span></div>
@@ -58,6 +58,11 @@
           </div>
         </section>
       </div>
+      <nav class="passage-navigation card" aria-label="Passage navigation">
+        <button class="button button-secondary" id="passage-back" type="button" disabled><span aria-hidden="true">←</span> Back</button>
+        <button class="button button-secondary" id="passage-forward" type="button" disabled>Forward <span aria-hidden="true">→</span></button>
+        <button class="button button-primary" id="move-to-latest" type="button" disabled>Move to latest <span aria-hidden="true">↗</span></button>
+      </nav>
     </section>
 
     <section id="history-view" class="view" aria-labelledby="history-heading">

@@ -26,7 +26,7 @@ The server listens only on this computer (`127.0.0.1`). If the browser does not 
    - Windows: `C:\Users\yourname\Music\Beethoven Sonata`
 3. Save. The app finds supported files in that folder and its subfolders. It ignores other file types (including LilyPond sources).
 
-Supported score files: `.pdf`, `.png`, `.jpg`, and `.jpeg`. PDF viewing uses the browser's built-in PDF viewer. The Practice screen chooses a random file each time; repeats are possible. Use **Notes** and **Save practice note** to record a practice session. Saving a blank note still records the session; choosing another section alone does not.
+Supported score files: `.pdf`, `.png`, `.jpg`, and `.jpeg`. PDF viewing uses the browser's built-in PDF viewer. The Practice screen chooses a random file each time; repeats are possible. Use **Notes** and **Save practice note** to record a practice session, or use **Log passage and practice next** to log the current passage with a blank note and then choose another section. **Practice next** changes sections without recording practice. The bottom **Back**, **Forward**, and **Move to latest** controls navigate passages shown during the current page session without logging them.
 
 ## Data and iCloud
 

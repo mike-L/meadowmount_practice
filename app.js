@@ -1,4 +1,4 @@
-const state = { token: "", pieces: [], library: [], history: [], selectedPieceId: "", selectedSection: null, toastTimer: null };
+const state = { token: "", pieces: [], library: [], history: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const uniqueId = () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -77,12 +77,47 @@ function selectPiece(pieceId, pick = false) {
   else renderPieces();
 }
 
+function setPassage(pieceId, sectionPath, addToTrail = true, forceTrailEntry = false) {
+  const section = sectionFor(pieceId, sectionPath);
+  if (!section) return false;
+  state.selectedPieceId = pieceId;
+  state.selectedSection = { pieceId, path: section.path };
+  if (addToTrail) {
+    if (state.passageIndex < state.passageTrail.length - 1) {
+      state.passageTrail = state.passageTrail.slice(0, state.passageIndex + 1);
+    }
+    const current = state.passageTrail[state.passageIndex];
+    if (forceTrailEntry || !current || current.pieceId !== pieceId || current.path !== section.path) {
+      state.passageTrail.push({ pieceId, path: section.path });
+      state.passageIndex = state.passageTrail.length - 1;
+    }
+  }
+  renderPractice();
+  return true;
+}
+
 function chooseRandomSection(piece) {
   if (!piece?.sections?.length) return;
   const section = piece.sections[Math.floor(Math.random() * piece.sections.length)];
-  state.selectedPieceId = piece.id;
-  state.selectedSection = { pieceId: piece.id, path: section.path };
-  renderPractice();
+  setPassage(piece.id, section.path, true, true);
+}
+
+function navigatePassage(index) {
+  if (index < 0 || index >= state.passageTrail.length || index === state.passageIndex) return;
+  const passage = state.passageTrail[index];
+  if (!sectionFor(passage.pieceId, passage.path)) {
+    showToast("That passage is no longer available in its piece folder.", true);
+    return;
+  }
+  state.passageIndex = index;
+  setPassage(passage.pieceId, passage.path, false);
+}
+
+function updatePassageNavigation() {
+  const hasPassage = state.passageIndex >= 0;
+  $("#passage-back").disabled = !hasPassage || state.passageIndex === 0;
+  $("#passage-forward").disabled = !hasPassage || state.passageIndex >= state.passageTrail.length - 1;
+  $("#move-to-latest").disabled = !hasPassage || state.passageIndex >= state.passageTrail.length - 1;
 }
 
 function renderPractice() {
@@ -91,6 +126,7 @@ function renderPractice() {
   $("#score-empty").classList.toggle("hidden", !!selected || validPieceCount > 0);
   $("#score-workspace").classList.toggle("hidden", !selected);
   renderPieces();
+  updatePassageNavigation();
   if (!selected) return;
   const piece = state.library.find(item => item.id === state.selectedSection.pieceId);
   $("#selected-piece-name").textContent = piece.name.toLocaleUpperCase();
@@ -294,9 +330,8 @@ async function reopenHistory(event) {
   if (!sectionFor(event.pieceId, event.sectionPath)) {
     showToast("That score file is no longer in the configured folder.", true); return;
   }
-  state.selectedPieceId = event.pieceId;
-  state.selectedSection = { pieceId: event.pieceId, path: event.sectionPath };
-  showView("practice"); renderPractice();
+  setPassage(event.pieceId, event.sectionPath, true, true);
+  showView("practice");
 }
 
 async function deleteHistory(id) {
@@ -348,6 +383,27 @@ async function saveNote() {
   finally { button.disabled = false; button.textContent = "Save practice note"; }
 }
 
+async function logAndPracticeNext() {
+  const current = state.selectedSection && { ...state.selectedSection };
+  const selected = current && sectionFor(current.pieceId, current.path);
+  const piece = current && state.library.find(item => item.id === current.pieceId);
+  if (!selected || !piece?.sections.length) return;
+  const button = $("#log-and-next");
+  button.disabled = true;
+  button.textContent = "Saving practice…";
+  try {
+    await api("/api/history", { method: "POST", body: JSON.stringify({ pieceId: current.pieceId, sectionPath: selected.path, note: "" }) });
+    const next = piece.sections[Math.floor(Math.random() * piece.sections.length)];
+    setPassage(piece.id, next.path, true, true);
+    showToast("Passage logged. Here’s another section to practice.");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '✓ <span>Log passage and practice next</span>';
+  }
+}
+
 function wireEvents() {
   $$(".nav-button").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $("#go-library").addEventListener("click", () => showView("library"));
@@ -359,6 +415,10 @@ function wireEvents() {
   $("#piece-form").addEventListener("submit", savePiece);
   $("#data-location-form").addEventListener("submit", saveDataLocation);
   $("#practice-next").addEventListener("click", () => chooseRandomSection(state.library.find(piece => piece.id === state.selectedPieceId)));
+  $("#log-and-next").addEventListener("click", logAndPracticeNext);
+  $("#passage-back").addEventListener("click", () => navigatePassage(state.passageIndex - 1));
+  $("#passage-forward").addEventListener("click", () => navigatePassage(state.passageIndex + 1));
+  $("#move-to-latest").addEventListener("click", () => navigatePassage(state.passageTrail.length - 1));
   $("#open-note").addEventListener("click", openNoteEditor);
   $("#close-note").addEventListener("click", () => $("#note-editor").classList.add("hidden"));
   $("#save-note").addEventListener("click", saveNote);
