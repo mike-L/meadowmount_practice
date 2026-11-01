@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f6f8f1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://*.dropboxusercontent.com; frame-src https://*.dropboxusercontent.com; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://*.dropboxusercontent.com; frame-src blob: https://*.dropboxusercontent.com; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; object-src 'none'; base-uri 'none'; form-action 'self'">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Meadowmount">
@@ -25,7 +25,7 @@
       <button class="nav-button" data-view="history">History</button>
       <button class="nav-button" data-view="library">Pieces &amp; folders</button>
     </nav>
-    <span class="local-pill"><span></span> Synced with Dropbox</span>
+    <span class="local-pill" id="sync-status" role="status"><span class="sync-dot"></span> <span id="sync-status-text">Synced with Dropbox</span></span>
   </header>
 
   <main class="app-shell">

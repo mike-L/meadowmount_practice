@@ -52,11 +52,25 @@ On the Practice screen:
 
 Sections are numbered in natural order, so `2.png` comes before `10.png`.
 
+**Rounds.** Random picks don't repeat a section until you've logged every section of the piece, which completes the round. The progress shows under the score, for example `3 of 9 practised this round`. If only one section is left and you press **Practice next**, or log a different section with **Log passage and practice next**, a new round starts and picks come from all sections again. Rounds are worked out from the shared history, so all your devices agree.
+
 History can be exported and imported from the History screen. Imports merge entries.
 
 ## Using more than one device
 
 Every save reads the latest `app-data.json`, applies the change, and writes it back only if no other device saved in the meantime. If another device did save, it starts again from that version. This means the iPad and the Mac don't overwrite each other's entries. If you want to see entries made on another device, refresh the page.
+
+## Offline practice
+
+After the app has been opened once with a connection, it works offline:
+
+- The app itself, your piece list, your history and every score screenshot are stored on the device. Screenshots are downloaded in the background and re-downloaded only when they change in Dropbox.
+- **Log passage and practice next** and **Save practice note** work offline. Logs are kept on the device, and the top bar shows something like "Offline · 2 waiting to sync".
+- Waiting logs are sent to Dropbox automatically when the connection returns, or the next time the app is opened online. Each log slots into your history at the time you practised, alongside anything logged on another device in the meantime, so nothing is lost.
+- Until the logs sync, other devices don't know about them, so "no repeats this round" there may offer a section you've already practised offline.
+- Adding, editing or removing pieces, deleting history, and seeing screenshots added since the device was last online all need a connection.
+
+When the device is online, it always loads the newest version of the app, so there's no need to reinstall the Home Screen icon after an update.
 
 ## Test locally on the Mac
 
@@ -81,6 +95,7 @@ Then open <http://localhost:8000/> in Chrome. This command only serves the files
 - `app.js`: practice, history and piece screens
 - `dropbox.js`: Dropbox sign-in, library listing and saving `app-data.json`
 - `config.js`: your Dropbox app key
+- `sw.js`: service worker that keeps the app's files on the device for offline use
 
 ## Licence
 

@@ -1,6 +1,10 @@
-const state = { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null, wakeLock: null };
+const state = { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null, wakeLock: null, offline: false, syncing: null, scoreObjectUrl: "", prefetching: null, roundStarts: {} };
 const PIECES_HIDDEN_KEY = "meadowmount.piecesHidden";
 const FILL_SCORE_KEY = "meadowmount.fillScore";
+const SNAPSHOT_KEY = "meadowmount.snapshot";
+const PENDING_KEY = "meadowmount.pending";
+const PENDING_ROUNDS_KEY = "meadowmount.pendingRounds";
+const SCORE_CACHE = "meadowmount-scores";
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const uniqueId = () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -43,6 +47,50 @@ function writeFlag(key, value) {
   try { localStorage.setItem(key, value ? "1" : ""); } catch { /* storage blocked */ }
 }
 
+function readJson(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+}
+
+function writeJson(key, value) {
+  try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or blocked */ }
+}
+
+// Practice logs saved on this device that haven't reached Dropbox yet.
+const readPending = () => readJson(PENDING_KEY, []);
+const writePending = entries => writeJson(PENDING_KEY, entries);
+
+// Round restarts (piece id → time) saved on this device that haven't reached Dropbox yet.
+const readPendingRounds = () => readJson(PENDING_ROUNDS_KEY, {});
+const writePendingRounds = rounds => writeJson(PENDING_ROUNDS_KEY, rounds);
+const hasPending = () => readPending().length > 0 || Object.keys(readPendingRounds()).length > 0;
+
+// Keeps the latest restart time for each piece.
+function mergeRoundStarts(...sources) {
+  const merged = {};
+  for (const source of sources) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+    for (const [pieceId, time] of Object.entries(source)) {
+      if (!merged[pieceId] || Date.parse(time) > Date.parse(merged[pieceId])) merged[pieceId] = time;
+    }
+  }
+  return merged;
+}
+
+// Adds entries not already present, each placed by its practice time (history is newest first).
+// Older timestamps are to the second, so an added entry goes before existing ones from the same moment.
+function mergeHistory(history, extra) {
+  const known = new Set(history.map(entry => entry.id));
+  const merged = [...history];
+  const time = entry => Date.parse(entry.timestamp) || 0;
+  for (const entry of extra) {
+    if (known.has(entry.id)) continue;
+    const index = merged.findIndex(existing => time(existing) <= time(entry));
+    merged.splice(index < 0 ? merged.length : index, 0, entry);
+    known.add(entry.id);
+  }
+  return merged;
+}
+
 function setPiecesHidden(hidden) {
   document.body.classList.toggle("pieces-hidden", hidden);
   const button = $("#toggle-pieces");
@@ -71,11 +119,11 @@ async function keepScreenAwake() {
   } catch { /* not allowed until the next tap */ }
 }
 
-// Same format the Python server wrote: local time with offset, whole seconds.
+// Local time with offset, to the millisecond so logs and round restarts always order correctly.
 function localTimestamp(date = new Date()) {
   const pad = number => String(Math.abs(number)).padStart(2, "0");
   const offset = -date.getTimezoneOffset();
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}`
     + `${offset >= 0 ? "+" : "-"}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
 }
 
@@ -85,14 +133,15 @@ function sectionFor(pieceId, sectionPath) {
 }
 
 function buildLibrary(pieces, listing) {
+  const folderPaths = new Set(listing.folderPaths);
   return pieces.map(piece => {
     const folder = String(piece.path || "").replace(/^\/+|\/+$/g, "");
     const prefix = `/${folder.toLowerCase()}/`;
     const sections = listing.files
       .filter(file => file.pathLower.startsWith(prefix))
-      .map(file => ({ path: file.pathDisplay.slice(prefix.length), name: file.name, type: /\.pdf$/i.test(file.name) ? "pdf" : "image", dropboxPath: file.pathDisplay }))
+      .map(file => ({ path: file.pathDisplay.slice(prefix.length), name: file.name, type: /\.pdf$/i.test(file.name) ? "pdf" : "image", dropboxPath: file.pathDisplay, pathLower: file.pathLower, rev: file.rev }))
       .sort((a, b) => collator.compare(a.path, b.path));
-    const error = folder && listing.folderPaths.has(`/${folder.toLowerCase()}`) ? null : `Folder “${folder}” was not found in your Dropbox app folder.`;
+    const error = folder && folderPaths.has(`/${folder.toLowerCase()}`) ? null : `Folder “${folder}” was not found in your Dropbox app folder.`;
     return { id: piece.id, name: piece.name, sections, error };
   });
 }
@@ -165,13 +214,15 @@ function setPassage(pieceId, sectionPath, addToTrail = true, forceTrailEntry = f
 }
 
 // Works out the current round from the practice history: a round ends once every
-// section in the folder has been logged, and the next log starts a new one.
+// section in the folder has been logged, or when it was restarted (see nextSection).
 function roundProgress(piece) {
   const paths = new Set(piece.sections.map(section => section.path));
+  const restartedAt = Date.parse(state.roundStarts[piece.id]) || 0;
   let done = new Set();
   for (let i = state.history.length - 1; i >= 0; i--) {
     const event = state.history[i];
     if (event.pieceId !== piece.id || !paths.has(event.sectionPath)) continue;
+    if ((Date.parse(event.timestamp) || 0) <= restartedAt) continue;
     done.add(event.sectionPath);
     if (done.size === paths.size) done = new Set();
   }
@@ -183,9 +234,29 @@ function chooseRandomSection(piece) {
   if (!piece?.sections?.length) return;
   const { remaining } = roundProgress(piece);
   const current = state.selectedSection?.pieceId === piece.id ? state.selectedSection.path : null;
-  const pool = remaining.length > 1 ? remaining.filter(section => section.path !== current) : remaining;
+  const notCurrent = sections => sections.filter(section => section.path !== current);
+  const pool = [notCurrent(remaining), notCurrent(piece.sections), piece.sections].find(list => list.length);
   const section = pool[Math.floor(Math.random() * pool.length)];
   setPassage(piece.id, section.path, true, true);
+}
+
+// Starts a new round for the piece now; shared with other devices like a practice log.
+function restartRound(piece) {
+  const time = localTimestamp();
+  writePendingRounds({ ...readPendingRounds(), [piece.id]: time });
+  state.roundStarts = { ...state.roundStarts, [piece.id]: time };
+  syncPending().catch(error => { if (!error.offline) handleError(error); });
+}
+
+const newRoundMessage = piece => `New round — picking from all ${piece.sections.length} sections of ${piece.name} again.`;
+
+// "Practice next": once only one section is left in the round, start a new round from the full set.
+function nextSection(piece) {
+  if (!piece?.sections?.length) return;
+  const restart = piece.sections.length > 1 && roundProgress(piece).remaining.length === 1;
+  if (restart) restartRound(piece);
+  chooseRandomSection(piece);
+  if (restart) showToast(newRoundMessage(piece));
 }
 
 function navigatePassage(index) {
@@ -206,9 +277,48 @@ function updatePassageNavigation() {
   $("#move-to-latest").disabled = !hasPassage || state.passageIndex >= state.passageTrail.length - 1;
 }
 
-function showMediaFallback(frame, element) {
+function showMediaFallback(frame, element, offline = false) {
   if (!element.isConnected) return;
-  frame.innerHTML = '<div class="media-fallback">This score file could not be displayed. Check that it is still in Dropbox and is a valid PDF, PNG or JPEG.</div>';
+  frame.innerHTML = offline
+    ? '<div class="media-fallback">This score isn’t saved on this device yet. Open the app once with an internet connection to download it.</div>'
+    : '<div class="media-fallback">This score file could not be displayed. Check that it is still in Dropbox and is a valid PDF, PNG or JPEG.</div>';
+}
+
+// Score files are kept on the device (Cache Storage) so practice works offline.
+const scoreKey = section => `__scores__/${encodeURIComponent(section.pathLower)}?rev=${encodeURIComponent(section.rev)}`;
+const SCORE_TYPES = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg" };
+
+async function cachedScore(section) {
+  const cache = await caches.open(SCORE_CACHE);
+  const stored = await cache.match(scoreKey(section));
+  if (stored) return stored.blob();
+  const type = SCORE_TYPES[section.name.split(".").pop().toLowerCase()] || "application/octet-stream";
+  const blob = new Blob([await Dropbox.downloadFile(section.dropboxPath)], { type });
+  await cache.put(scoreKey(section), new Response(blob, { headers: { "Content-Type": type } }));
+  return blob;
+}
+
+async function scoreUrl(section) {
+  if (!globalThis.caches) return Dropbox.mediaUrl(section.dropboxPath);
+  return URL.createObjectURL(await cachedScore(section));
+}
+
+// Downloads every score for the configured pieces and drops copies that are out of date.
+async function downloadScores() {
+  try {
+    const cache = await caches.open(SCORE_CACHE);
+    const sections = state.library.flatMap(piece => piece.sections);
+    const wanted = new Set(sections.map(section => new URL(scoreKey(section), location.href).href));
+    for (const request of await cache.keys()) if (!wanted.has(request.url)) await cache.delete(request);
+    for (const section of sections) await cachedScore(section);
+  } catch { /* offline or interrupted; carries on next time */ }
+}
+
+// Runs one download pass at a time; a request made during a pass queues another with the latest library.
+function prefetchScores() {
+  if (!globalThis.caches) return Promise.resolve();
+  state.prefetching = (state.prefetching || Promise.resolve()).then(downloadScores);
+  return state.prefetching;
 }
 
 function updateSectionCounter() {
@@ -244,23 +354,112 @@ function renderPractice() {
     element.setAttribute("allow", "fullscreen");
   }
   frame.append(element);
-  Dropbox.mediaUrl(selected.dropboxPath)
-    .then(url => { if (element.isConnected) element.src = url; })
-    .catch(error => { showMediaFallback(frame, element); if (error.signedOut) handleError(error); });
+  scoreUrl(selected)
+    .then(url => {
+      const isObjectUrl = url.startsWith("blob:");
+      if (!element.isConnected) { if (isObjectUrl) URL.revokeObjectURL(url); return; }
+      if (state.scoreObjectUrl) URL.revokeObjectURL(state.scoreObjectUrl);
+      state.scoreObjectUrl = isObjectUrl ? url : "";
+      element.src = url;
+    })
+    .catch(error => { showMediaFallback(frame, element, error.offline); if (error.signedOut) handleError(error); });
   $("#note-editor").classList.add("hidden");
   $("#note-text").value = "";
 }
 
+// History shown on this device includes logs still waiting to sync.
 function applyData(data) {
   state.pieces = data.pieces;
-  state.history = data.history;
+  state.history = mergeHistory(data.history, readPending());
+  state.roundStarts = mergeRoundStarts(data.roundStarts, readPendingRounds());
+}
+
+// For data just read from or written to Dropbox: also refreshes this device's offline copy.
+function applySaved(data) {
+  const snapshot = readJson(SNAPSHOT_KEY, null);
+  if (snapshot) writeJson(SNAPSHOT_KEY, { ...snapshot, data });
+  setOffline(false);
+  applyData(data);
+}
+
+function setOffline(offline) {
+  state.offline = offline;
+  updateSyncStatus();
+}
+
+function updateSyncStatus() {
+  const waiting = readPending().length;
+  const text = state.offline
+    ? (waiting ? `Offline · ${waiting} waiting to sync` : "Offline")
+    : waiting ? (state.syncing ? `Syncing ${waiting}…` : `${waiting} waiting to sync`) : "Synced with Dropbox";
+  $("#sync-status-text").textContent = text;
+  $("#sync-status").classList.toggle("attention", state.offline || waiting > 0);
+}
+
+// Reads the library from Dropbox, or this device's last copy when offline.
+async function fetchLibrary() {
+  try {
+    const [{ data }, listing] = await Promise.all([Dropbox.readData(), Dropbox.listLibrary()]);
+    writeJson(SNAPSHOT_KEY, { data, listing });
+    setOffline(false);
+    return { data, listing, fresh: true };
+  } catch (error) {
+    const snapshot = readJson(SNAPSHOT_KEY, null);
+    if (!error.offline || !snapshot) throw error;
+    setOffline(true);
+    return { ...snapshot, fresh: false };
+  }
+}
+
+// Sends logs and round restarts saved on this device to Dropbox, merging logs in by practice time.
+// Anything added while a sync is running is picked up by the same sync.
+function syncPending() {
+  if (!state.syncing) {
+    state.syncing = (async () => {
+      try {
+        while (hasPending()) {
+          const pending = readPending();
+          const rounds = readPendingRounds();
+          updateSyncStatus();
+          const data = await Dropbox.mutate(saved => {
+            saved.history = mergeHistory(saved.history, pending);
+            if (Object.keys(rounds).length) saved.roundStarts = mergeRoundStarts(saved.roundStarts, rounds);
+          });
+          const sent = new Set(pending.map(entry => entry.id));
+          writePending(readPending().filter(entry => !sent.has(entry.id)));
+          writePendingRounds(Object.fromEntries(Object.entries(readPendingRounds()).filter(([pieceId, time]) => rounds[pieceId] !== time)));
+          applySaved(data);
+        }
+      } catch (error) {
+        if (error.offline) setOffline(true);
+        throw error;
+      } finally {
+        state.syncing = null;
+        updateSyncStatus();
+      }
+    })();
+  }
+  return state.syncing;
+}
+
+function syncInBackground() {
+  const waiting = readPending().length;
+  if (!hasPending() || !Dropbox.isConnected()) return;
+  syncPending()
+    .then(() => {
+      updateSectionCounter();
+      if ($("#history-view").classList.contains("active")) renderHistory();
+      if (waiting) showToast(`${waiting} practice log${waiting === 1 ? "" : "s"} from this device synced to Dropbox.`);
+    })
+    .catch(error => { if (!error.offline) handleError(error); });
 }
 
 async function refreshLibrary() {
-  const [{ data }, listing] = await Promise.all([Dropbox.readData(), Dropbox.listLibrary()]);
+  const { data, listing, fresh } = await fetchLibrary();
   applyData(data);
   state.library = buildLibrary(state.pieces, listing);
   state.folders = folderSummaries(listing);
+  if (fresh) { prefetchScores(); syncInBackground(); }
   if (!state.library.some(piece => piece.id === state.selectedPieceId && !piece.error && piece.sections.length)) {
     state.selectedPieceId = state.library.find(piece => !piece.error && piece.sections.length)?.id || "";
     state.selectedSection = null;
@@ -286,8 +485,20 @@ async function loadLibrary() {
 }
 
 async function disconnectDropbox() {
+  if (hasPending()) {
+    try { await syncPending(); }
+    catch {
+      const waiting = readPending().length;
+      if (!confirm(`${waiting} practice log${waiting === 1 ? " hasn’t" : "s haven’t"} reached Dropbox yet and will be lost if you disconnect now. Disconnect anyway?`)) return;
+    }
+  }
   if (!confirm("Disconnect Dropbox on this device? Your files and history stay in Dropbox; you can connect again at any time.")) return;
   await Dropbox.disconnect();
+  writePending(null);
+  writePendingRounds(null);
+  writeJson(SNAPSHOT_KEY, null);
+  if (globalThis.caches) await caches.delete(SCORE_CACHE).catch(() => {});
+  updateSyncStatus();
   Object.assign(state, { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1 });
   showSignedOut();
 }
@@ -400,8 +611,12 @@ async function removePiece(id) {
 
 async function loadHistory() {
   try {
-    const { data } = await Dropbox.readData(); applyData(data); renderHistory();
-  } catch (error) { handleError(error); }
+    const { data } = await Dropbox.readData(); applySaved(data); renderHistory();
+  } catch (error) {
+    const snapshot = readJson(SNAPSHOT_KEY, null);
+    if (error.offline && snapshot) { setOffline(true); applyData(snapshot.data); renderHistory(); }
+    else handleError(error);
+  }
 }
 
 function renderHistory() {
@@ -452,7 +667,8 @@ async function reopenHistory(event) {
 async function deleteHistory(id) {
   if (!confirm("Delete this practice history entry?")) return;
   try {
-    applyData(await Dropbox.mutate(data => { data.history = data.history.filter(event => event.id !== id); }));
+    writePending(readPending().filter(event => event.id !== id));
+    applySaved(await Dropbox.mutate(data => { data.history = data.history.filter(event => event.id !== id); }));
     renderHistory(); showToast("History entry deleted.");
   } catch (error) { handleError(error); }
 }
@@ -471,7 +687,7 @@ async function importHistory(event) {
     if (!Array.isArray(entries)) throw new Error("This file does not contain a Meadowmount history list.");
     const valid = entries.filter(item => item && typeof item === "object" && typeof item.sectionPath === "string" && typeof item.note === "string");
     if (!valid.length) throw new Error("No valid history entries were found.");
-    applyData(await Dropbox.mutate(data => {
+    applySaved(await Dropbox.mutate(data => {
       const existingIds = new Set(data.history.map(item => item.id));
       const pieceNames = new Map(data.pieces.map(piece => [piece.id, piece.name]));
       const cleaned = valid.map(item => ({ id: existingIds.has(item.id) ? uniqueId() : (item.id || uniqueId()), timestamp: item.timestamp || localTimestamp(), pieceId: item.pieceId || "", pieceName: pieceNames.get(item.pieceId) || item.pieceName || "Imported piece", sectionPath: item.sectionPath, sectionName: item.sectionName || item.sectionPath.split("/").pop(), note: item.note.slice(0, 10000) }));
@@ -490,27 +706,37 @@ function openNoteEditor() {
   $("#note-editor").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-// Adds a practice entry for the given passage, re-checking the piece against the latest saved data.
-function recordPractice(pieceId, section, note) {
-  return Dropbox.mutate(data => {
-    const piece = data.pieces.find(item => item.id === pieceId);
-    if (!piece) throw new Error("That piece is no longer configured.");
-    data.history.unshift({ id: uniqueId(), timestamp: localTimestamp(), pieceId, pieceName: piece.name, sectionPath: section.path, sectionName: section.name, note: note.slice(0, 10000) });
-  });
+// Saves a practice entry on this device first, then sends it (with anything else waiting) to Dropbox.
+// Returns false if it is waiting to sync because the device is offline.
+async function recordPractice(pieceId, section, note) {
+  const piece = state.library.find(item => item.id === pieceId);
+  const entry = { id: uniqueId(), timestamp: localTimestamp(), pieceId, pieceName: piece?.name || "Unknown piece", sectionPath: section.path, sectionName: section.name, note: note.slice(0, 10000) };
+  writePending([...readPending(), entry]);
+  state.history = mergeHistory(state.history, [entry]);
+  updateSyncStatus();
+  try {
+    await syncPending();
+    return true;
+  } catch (error) {
+    if (error.offline) return false;
+    throw error;
+  }
 }
+
+const OFFLINE_SAVED = " Saved on this device — it will sync to Dropbox when you’re back online.";
 
 async function saveNote() {
   const selected = state.selectedSection && sectionFor(state.selectedSection.pieceId, state.selectedSection.path);
   if (!selected) return;
   const button = $("#save-note"); button.disabled = true; button.textContent = "Saving…";
   try {
-    applyData(await recordPractice(state.selectedSection.pieceId, selected, $("#note-text").value));
+    const synced = await recordPractice(state.selectedSection.pieceId, selected, $("#note-text").value);
     $("#note-editor").classList.add("hidden"); $("#note-text").value = "";
     updateSectionCounter();
     const piece = state.library.find(item => item.id === state.selectedSection.pieceId);
-    showToast(roundProgress(piece).done.size === 0
+    showToast((roundProgress(piece).done.size === 0
       ? `Practice saved. Round complete — you’ve practised all ${piece.sections.length} sections of ${piece.name}.`
-      : "Practice session saved to your history.");
+      : "Practice session saved to your history.") + (synced ? "" : OFFLINE_SAVED));
   } catch (error) { handleError(error); }
   finally { button.disabled = false; button.textContent = "Save practice note"; }
 }
@@ -524,12 +750,16 @@ async function logAndPracticeNext() {
   button.disabled = true;
   button.textContent = "Saving practice…";
   try {
-    applyData(await recordPractice(current.pieceId, selected, ""));
+    const lastOneLeft = roundProgress(piece).remaining.length === 1;
+    const synced = await recordPractice(current.pieceId, selected, "");
     const roundComplete = roundProgress(piece).done.size === 0;
+    // Only one section was left and this log didn't complete the round, so start a new one.
+    const restart = lastOneLeft && !roundComplete && piece.sections.length > 1;
+    if (restart) restartRound(piece);
     chooseRandomSection(piece);
-    showToast(roundComplete
+    showToast((roundComplete
       ? `Round complete — you’ve practised all ${piece.sections.length} sections of ${piece.name}. Starting a new round.`
-      : "Passage logged. Here’s another section to practice.");
+      : restart ? `Passage logged. ${newRoundMessage(piece)}` : "Passage logged. Here’s another section to practice.") + (synced ? "" : OFFLINE_SAVED));
   } catch (error) {
     handleError(error);
   } finally {
@@ -548,6 +778,10 @@ function wireEvents() {
   $("#toggle-pieces").addEventListener("click", () => setPiecesHidden(!document.body.classList.contains("pieces-hidden")));
   $("#fit-score").addEventListener("click", () => setScoreFilled(!$("#score-frame").classList.contains("fill")));
   document.addEventListener("visibilitychange", keepScreenAwake);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncInBackground(); });
+  window.addEventListener("online", () => { setOffline(false); syncInBackground(); prefetchScores(); });
+  window.addEventListener("offline", () => setOffline(true));
+  setInterval(syncInBackground, 60_000);
   document.addEventListener("pointerdown", keepScreenAwake);
   $("#connect-dropbox").addEventListener("click", connectDropbox);
   $("#disconnect-dropbox").addEventListener("click", disconnectDropbox);
@@ -559,7 +793,7 @@ function wireEvents() {
   $("#cancel-piece-secondary").addEventListener("click", closePieceForm);
   $("#browse-folders").addEventListener("click", toggleFolderBrowser);
   $("#piece-form").addEventListener("submit", savePiece);
-  $("#practice-next").addEventListener("click", () => chooseRandomSection(state.library.find(piece => piece.id === state.selectedPieceId)));
+  $("#practice-next").addEventListener("click", () => nextSection(state.library.find(piece => piece.id === state.selectedPieceId)));
   $("#log-and-next").addEventListener("click", logAndPracticeNext);
   $("#passage-back").addEventListener("click", () => navigatePassage(state.passageIndex - 1));
   $("#passage-forward").addEventListener("click", () => navigatePassage(state.passageIndex + 1));
@@ -573,7 +807,9 @@ function wireEvents() {
 }
 
 async function start() {
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { /* app still works online */ });
   wireEvents();
+  updateSyncStatus();
   setPiecesHidden(readFlag(PIECES_HIDDEN_KEY));
   setScoreFilled(readFlag(FILL_SCORE_KEY));
   keepScreenAwake();

@@ -10,11 +10,13 @@ const Dropbox = (() => {
   let auth = readStored(AUTH_KEY);
 
   class DropboxError extends Error {
-    constructor(message, { status = 0, summary = "", signedOut = false } = {}) {
+    constructor(message, { status = 0, summary = "", signedOut = false, offline = false } = {}) {
       super(message);
-      this.status = status; this.summary = summary; this.signedOut = signedOut;
+      this.status = status; this.summary = summary; this.signedOut = signedOut; this.offline = offline;
     }
   }
+
+  const offlineError = () => new DropboxError("You’re offline — this needs a connection to Dropbox.", { offline: true });
 
   function readStored(key) {
     try { return JSON.parse(localStorage.getItem(key)) || null; } catch { return null; }
@@ -62,7 +64,9 @@ const Dropbox = (() => {
   }
 
   async function tokenRequest(fields) {
-    const response = await fetch("https://api.dropboxapi.com/oauth2/token", { method: "POST", body: new URLSearchParams({ client_id: DROPBOX_APP_KEY, ...fields }) });
+    let response;
+    try { response = await fetch("https://api.dropboxapi.com/oauth2/token", { method: "POST", body: new URLSearchParams({ client_id: DROPBOX_APP_KEY, ...fields }) }); }
+    catch { throw offlineError(); }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (fields.grant_type === "refresh_token" && response.status === 400) {
@@ -87,7 +91,7 @@ const Dropbox = (() => {
     const headers = { ...options.headers, Authorization: `Bearer ${await accessToken()}` };
     let response;
     try { response = await fetch(url, { ...options, method: "POST", headers }); }
-    catch { throw new DropboxError("Could not reach Dropbox. Check your internet connection."); }
+    catch { throw offlineError(); }
     if (response.status === 401 && !retried) {
       saveAuth({ ...auth, accessToken: "" });
       return send(url, options, true);
@@ -128,18 +132,19 @@ const Dropbox = (() => {
   }
 
   // Returns every folder (as lower-case paths), the top-level folders, and every supported score file.
+  // Plain arrays so the listing can be saved on the device for offline use.
   async function listLibrary() {
-    const folderPaths = new Set();
+    const folderPaths = [];
     const topFolders = [];
     const files = [];
     for (const entry of await listFolder("")) {
       const parts = entry.path_display.split("/").slice(1);
       if (parts.some(part => part.startsWith("."))) continue;
       if (entry[".tag"] === "folder") {
-        folderPaths.add(entry.path_lower);
+        folderPaths.push(entry.path_lower);
         if (parts.length === 1) topFolders.push(entry.name);
       } else if (entry[".tag"] === "file" && parts.length > 1 && SUPPORTED.test(entry.name)) {
-        files.push({ name: entry.name, pathDisplay: entry.path_display, pathLower: entry.path_lower });
+        files.push({ name: entry.name, pathDisplay: entry.path_display, pathLower: entry.path_lower, rev: entry.rev || "" });
       }
     }
     return { folderPaths, topFolders, files };
@@ -196,6 +201,11 @@ const Dropbox = (() => {
     throw new DropboxError("Another device kept saving at the same time. Please try again.");
   }
 
+  async function downloadFile(path) {
+    const response = await send("https://content.dropboxapi.com/2/files/download", { headers: { "Dropbox-API-Arg": headerArg({ path }) } });
+    return response.blob();
+  }
+
   // Temporary links last four hours; reuse them for a little less than that.
   async function mediaUrl(path) {
     const cached = links.get(path);
@@ -205,5 +215,5 @@ const Dropbox = (() => {
     return link;
   }
 
-  return { isConnected, connect, finishConnect, disconnect, listLibrary, readData, mutate, mediaUrl };
+  return { isConnected, connect, finishConnect, disconnect, listLibrary, readData, mutate, downloadFile, mediaUrl };
 })();
