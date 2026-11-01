@@ -164,9 +164,27 @@ function setPassage(pieceId, sectionPath, addToTrail = true, forceTrailEntry = f
   return true;
 }
 
+// Works out the current round from the practice history: a round ends once every
+// section in the folder has been logged, and the next log starts a new one.
+function roundProgress(piece) {
+  const paths = new Set(piece.sections.map(section => section.path));
+  let done = new Set();
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    const event = state.history[i];
+    if (event.pieceId !== piece.id || !paths.has(event.sectionPath)) continue;
+    done.add(event.sectionPath);
+    if (done.size === paths.size) done = new Set();
+  }
+  return { done, remaining: piece.sections.filter(section => !done.has(section.path)) };
+}
+
+// Picks from sections not yet logged this round, avoiding the passage already on screen.
 function chooseRandomSection(piece) {
   if (!piece?.sections?.length) return;
-  const section = piece.sections[Math.floor(Math.random() * piece.sections.length)];
+  const { remaining } = roundProgress(piece);
+  const current = state.selectedSection?.pieceId === piece.id ? state.selectedSection.path : null;
+  const pool = remaining.length > 1 ? remaining.filter(section => section.path !== current) : remaining;
+  const section = pool[Math.floor(Math.random() * pool.length)];
   setPassage(piece.id, section.path, true, true);
 }
 
@@ -193,6 +211,14 @@ function showMediaFallback(frame, element) {
   frame.innerHTML = '<div class="media-fallback">This score file could not be displayed. Check that it is still in Dropbox and is a valid PDF, PNG or JPEG.</div>';
 }
 
+function updateSectionCounter() {
+  const selected = state.selectedSection && sectionFor(state.selectedSection.pieceId, state.selectedSection.path);
+  if (!selected) return;
+  const piece = state.library.find(item => item.id === state.selectedSection.pieceId);
+  const total = piece.sections.length;
+  $("#section-counter").textContent = `${piece.sections.indexOf(selected) + 1} of ${total} · ${roundProgress(piece).done.size} of ${total} practised this round`;
+}
+
 function renderPractice() {
   const selected = state.selectedSection && sectionFor(state.selectedSection.pieceId, state.selectedSection.path);
   const validPieceCount = state.library.filter(piece => !piece.error && piece.sections.length).length;
@@ -205,7 +231,7 @@ function renderPractice() {
   $("#selected-piece-name").textContent = piece.name.toLocaleUpperCase();
   $("#section-name").textContent = selected.name;
   $("#section-path").textContent = state.selectedSection.path;
-  $("#section-counter").textContent = `${piece.sections.indexOf(selected) + 1} of ${piece.sections.length}`;
+  updateSectionCounter();
   const frame = $("#score-frame");
   frame.replaceChildren();
   $("#fit-score").classList.toggle("hidden", selected.type !== "image");
@@ -479,7 +505,12 @@ async function saveNote() {
   const button = $("#save-note"); button.disabled = true; button.textContent = "Saving…";
   try {
     applyData(await recordPractice(state.selectedSection.pieceId, selected, $("#note-text").value));
-    $("#note-editor").classList.add("hidden"); $("#note-text").value = ""; showToast("Practice session saved to your history.");
+    $("#note-editor").classList.add("hidden"); $("#note-text").value = "";
+    updateSectionCounter();
+    const piece = state.library.find(item => item.id === state.selectedSection.pieceId);
+    showToast(roundProgress(piece).done.size === 0
+      ? `Practice saved. Round complete — you’ve practised all ${piece.sections.length} sections of ${piece.name}.`
+      : "Practice session saved to your history.");
   } catch (error) { handleError(error); }
   finally { button.disabled = false; button.textContent = "Save practice note"; }
 }
@@ -494,9 +525,11 @@ async function logAndPracticeNext() {
   button.textContent = "Saving practice…";
   try {
     applyData(await recordPractice(current.pieceId, selected, ""));
-    const next = piece.sections[Math.floor(Math.random() * piece.sections.length)];
-    setPassage(piece.id, next.path, true, true);
-    showToast("Passage logged. Here’s another section to practice.");
+    const roundComplete = roundProgress(piece).done.size === 0;
+    chooseRandomSection(piece);
+    showToast(roundComplete
+      ? `Round complete — you’ve practised all ${piece.sections.length} sections of ${piece.name}. Starting a new round.`
+      : "Passage logged. Here’s another section to practice.");
   } catch (error) {
     handleError(error);
   } finally {
