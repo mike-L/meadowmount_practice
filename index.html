@@ -25,7 +25,10 @@
       <button class="nav-button" data-view="history">History</button>
       <button class="nav-button" data-view="library">Pieces &amp; folders</button>
     </nav>
-    <span class="local-pill" id="sync-status" role="status"><span class="sync-dot"></span> <span id="sync-status-text">Synced with Dropbox</span></span>
+    <div class="topbar-status">
+      <button class="awake-status off hidden" id="awake-status" type="button">☾ Screen may sleep</button>
+      <span class="local-pill" id="sync-status" role="status"><span class="sync-dot"></span> <span id="sync-status-text">Synced with Dropbox</span></span>
+    </div>
   </header>
 
   <main class="app-shell">

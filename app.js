@@ -1,4 +1,4 @@
-const state = { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null, wakeLock: null, offline: false, syncing: null, scoreObjectUrl: "", prefetching: null, roundStarts: {} };
+const state = { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null, wakeLock: null, wakeLockPending: false, offline: false, syncing: null, scoreObjectUrl: "", prefetching: null, roundStarts: {} };
 const PIECES_HIDDEN_KEY = "meadowmount.piecesHidden";
 const FILL_SCORE_KEY = "meadowmount.fillScore";
 const SNAPSHOT_KEY = "meadowmount.snapshot";
@@ -110,13 +110,30 @@ function setScoreFilled(filled) {
   writeFlag(FILL_SCORE_KEY, filled);
 }
 
-// Keep the screen on while the app is open; the browser releases the lock whenever the page is hidden.
+// Keep the screen on while the app is open. The browser drops the lock when the page is hidden,
+// and iPadOS can drop it without warning, so it is re-checked on every tap and every 20 seconds.
 async function keepScreenAwake() {
-  if (!("wakeLock" in navigator) || document.visibilityState !== "visible" || state.wakeLock) return;
+  if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return updateAwakeStatus();
+  if ((state.wakeLock && !state.wakeLock.released) || state.wakeLockPending) return;
+  state.wakeLockPending = true;
   try {
     state.wakeLock = await navigator.wakeLock.request("screen");
-    state.wakeLock.addEventListener("release", () => { state.wakeLock = null; });
-  } catch { /* not allowed until the next tap */ }
+    state.wakeLock.addEventListener("release", updateAwakeStatus);
+  } catch {
+    state.wakeLock = null; // not allowed until the next tap
+  } finally {
+    state.wakeLockPending = false;
+    updateAwakeStatus();
+  }
+}
+
+function updateAwakeStatus() {
+  const indicator = $("#awake-status");
+  const held = !!state.wakeLock && !state.wakeLock.released;
+  indicator.classList.toggle("hidden", !("wakeLock" in navigator));
+  indicator.classList.toggle("off", !held);
+  indicator.textContent = held ? "☀ Screen on" : "☾ Screen may sleep";
+  indicator.title = held ? "The screen stays on while the app is open." : "The screen may sleep. Tap to keep it on.";
 }
 
 // Local time with offset, to the millisecond so logs and round restarts always order correctly.
@@ -783,6 +800,8 @@ function wireEvents() {
   window.addEventListener("offline", () => setOffline(true));
   setInterval(syncInBackground, 60_000);
   document.addEventListener("pointerdown", keepScreenAwake);
+  $("#awake-status").addEventListener("click", keepScreenAwake);
+  setInterval(keepScreenAwake, 20_000);
   $("#connect-dropbox").addEventListener("click", connectDropbox);
   $("#disconnect-dropbox").addEventListener("click", disconnectDropbox);
   $("#go-library").addEventListener("click", () => showView("library"));

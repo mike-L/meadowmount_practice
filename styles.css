@@ -36,3 +36,8 @@ body.pieces-hidden .card-heading>div:first-child,body.pieces-hidden .count-badge
 /* Offline and sync status */
 .local-pill.attention{color:#8a6420}
 .local-pill.attention .sync-dot{background:var(--gold);box-shadow:0 0 0 3px #f6ecd6}
+/* Screen-awake indicator */
+.topbar-status{display:flex;align-items:center;gap:14px}
+.awake-status{border:0;background:transparent;padding:6px 4px;font:600 11px inherit;color:#5f7a66;cursor:pointer;white-space:nowrap}
+.awake-status.off{color:#a46145}
+body.signed-out .awake-status{visibility:hidden}
