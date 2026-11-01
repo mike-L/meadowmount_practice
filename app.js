@@ -1,4 +1,6 @@
-const state = { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null };
+const state = { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null, wakeLock: null };
+const PIECES_HIDDEN_KEY = "meadowmount.piecesHidden";
+const FILL_SCORE_KEY = "meadowmount.fillScore";
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const uniqueId = () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -30,6 +32,43 @@ function showView(name) {
   $$(".nav-button").forEach(button => button.classList.toggle("active", button.dataset.view === name));
   if (name === "history") loadHistory();
   if (name === "library") loadLibrary();
+}
+
+// Per-device view preferences.
+function readFlag(key) {
+  try { return localStorage.getItem(key) === "1"; } catch { return false; }
+}
+
+function writeFlag(key, value) {
+  try { localStorage.setItem(key, value ? "1" : ""); } catch { /* storage blocked */ }
+}
+
+function setPiecesHidden(hidden) {
+  document.body.classList.toggle("pieces-hidden", hidden);
+  const button = $("#toggle-pieces");
+  const label = hidden ? "Show pieces" : "Hide pieces";
+  button.textContent = hidden ? "»" : "«";
+  button.setAttribute("aria-expanded", String(!hidden));
+  button.setAttribute("aria-label", label); button.title = label;
+  writeFlag(PIECES_HIDDEN_KEY, hidden);
+}
+
+// Enlarges screenshots to fill the score frame (keeping their proportions).
+function setScoreFilled(filled) {
+  $("#score-frame").classList.toggle("fill", filled);
+  const button = $("#fit-score");
+  button.setAttribute("aria-pressed", String(filled));
+  button.textContent = filled ? "⤡ Original size" : "⤢ Fill frame";
+  writeFlag(FILL_SCORE_KEY, filled);
+}
+
+// Keep the screen on while the app is open; the browser releases the lock whenever the page is hidden.
+async function keepScreenAwake() {
+  if (!("wakeLock" in navigator) || document.visibilityState !== "visible" || state.wakeLock) return;
+  try {
+    state.wakeLock = await navigator.wakeLock.request("screen");
+    state.wakeLock.addEventListener("release", () => { state.wakeLock = null; });
+  } catch { /* not allowed until the next tap */ }
 }
 
 // Same format the Python server wrote: local time with offset, whole seconds.
@@ -169,6 +208,7 @@ function renderPractice() {
   $("#section-counter").textContent = `${piece.sections.indexOf(selected) + 1} of ${piece.sections.length}`;
   const frame = $("#score-frame");
   frame.replaceChildren();
+  $("#fit-score").classList.toggle("hidden", selected.type !== "image");
   const element = document.createElement(selected.type === "image" ? "img" : "iframe");
   if (selected.type === "image") {
     element.alt = `${piece.name} — ${selected.name}`;
@@ -472,6 +512,10 @@ async function connectDropbox() {
 function wireEvents() {
   $$(".nav-button").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $("#toast").addEventListener("click", () => $("#toast").classList.remove("show"));
+  $("#toggle-pieces").addEventListener("click", () => setPiecesHidden(!document.body.classList.contains("pieces-hidden")));
+  $("#fit-score").addEventListener("click", () => setScoreFilled(!$("#score-frame").classList.contains("fill")));
+  document.addEventListener("visibilitychange", keepScreenAwake);
+  document.addEventListener("pointerdown", keepScreenAwake);
   $("#connect-dropbox").addEventListener("click", connectDropbox);
   $("#disconnect-dropbox").addEventListener("click", disconnectDropbox);
   $("#go-library").addEventListener("click", () => showView("library"));
@@ -497,6 +541,9 @@ function wireEvents() {
 
 async function start() {
   wireEvents();
+  setPiecesHidden(readFlag(PIECES_HIDDEN_KEY));
+  setScoreFilled(readFlag(FILL_SCORE_KEY));
+  keepScreenAwake();
   try {
     if (await Dropbox.finishConnect()) showToast("Dropbox connected.");
   } catch (error) { handleError(error); }

@@ -44,7 +44,7 @@
       </div>
       <div class="practice-layout">
         <aside class="piece-rail card">
-          <div class="card-heading"><div><p class="eyebrow">YOUR REPERTOIRE</p><h2>Pieces</h2></div><span class="count-badge" id="piece-count">0</span></div>
+          <div class="card-heading"><div><p class="eyebrow">YOUR REPERTOIRE</p><h2>Pieces</h2></div><div class="rail-controls"><span class="count-badge" id="piece-count">0</span><button class="icon-button rail-toggle" id="toggle-pieces" type="button" aria-expanded="true" aria-label="Hide pieces" title="Hide pieces">«</button></div></div>
           <div id="piece-list" class="piece-list"><div class="empty-state compact">Add a piece folder to get started.</div></div>
           <button class="text-button" id="add-piece-shortcut">＋ Add a piece</button>
         </aside>
@@ -59,7 +59,7 @@
               <div class="section-title"><span class="section-icon" aria-hidden="true">♪</span><div><p class="eyebrow" id="selected-piece-name">PIECE</p><h2 id="section-name">Section</h2></div></div>
               <div class="score-actions"><button class="button button-secondary" id="practice-next" title="Choose another random section">↻ <span>Practice next</span></button><button class="button button-secondary" id="log-and-next" title="Log this passage with a blank note, then choose another">✓ <span>Log passage and practice next</span></button><button class="button button-primary" id="open-note">✎ <span>Notes</span></button></div>
             </div>
-            <div id="score-frame" class="score-frame card" aria-live="polite"></div>
+            <div class="score-stage"><div id="score-frame" class="score-frame card" aria-live="polite"></div><button class="small-button score-fit" id="fit-score" type="button" aria-pressed="false">⤢ Fill frame</button></div>
             <div class="score-caption"><span id="section-path"></span><span id="section-counter"></span></div>
             <div id="note-editor" class="note-editor card hidden">
               <div class="note-heading"><div><p class="eyebrow">PRACTICE LOG</p><h2>What did you notice?</h2></div><button class="icon-button" id="close-note" aria-label="Close notes">×</button></div>
