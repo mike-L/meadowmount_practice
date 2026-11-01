@@ -81,3 +81,9 @@ Then open <http://localhost:8000/> in Chrome. This command only serves the files
 - `app.js`: practice, history and piece screens
 - `dropbox.js`: Dropbox sign-in, library listing and saving `app-data.json`
 - `config.js`: your Dropbox app key
+
+## Licence
+
+Copyright 2026 mike-L. Released under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
+
+You are welcome to use, copy and adapt this app for personal music study, teaching, and other non-commercial purposes, including at schools, charities and other non-profit organisations. Any commercial use, including selling it or building it into a paid product or service, needs written permission first. To ask, contact [mike-L on GitHub](https://github.com/mike-L).
