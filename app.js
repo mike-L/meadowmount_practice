@@ -1,18 +1,8 @@
-const state = { token: "", pieces: [], library: [], history: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null };
+const state = { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1, toastTimer: null };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const uniqueId = () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-
-async function api(path, options = {}) {
-  const method = (options.method || "GET").toUpperCase();
-  const headers = new Headers(options.headers || {});
-  if (options.body) headers.set("Content-Type", "application/json");
-  if (path !== "/api/session" && state.token) headers.set("X-App-Token", state.token);
-  const response = await fetch(path, { ...options, method, headers, cache: "no-store" });
-  const data = response.status === 204 ? {} : await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
-  return data;
-}
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 function showToast(message, isError = false) {
   const toast = $("#toast");
@@ -20,7 +10,19 @@ function showToast(message, isError = false) {
   toast.classList.toggle("error", isError);
   toast.classList.add("show");
   clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
+  // Errors stay until clicked so they can be read; other messages fade.
+  if (!isError) state.toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
+}
+
+function handleError(error) {
+  console.error(error);
+  if (error.signedOut) showSignedOut();
+  showToast(error.message, true);
+}
+
+function showSignedOut() {
+  document.body.classList.add("signed-out");
+  $$(".view").forEach(view => view.classList.toggle("active", view.id === "connect-view"));
 }
 
 function showView(name) {
@@ -30,9 +32,36 @@ function showView(name) {
   if (name === "library") loadLibrary();
 }
 
+// Same format the Python server wrote: local time with offset, whole seconds.
+function localTimestamp(date = new Date()) {
+  const pad = number => String(Math.abs(number)).padStart(2, "0");
+  const offset = -date.getTimezoneOffset();
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    + `${offset >= 0 ? "+" : "-"}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
+}
+
 function sectionFor(pieceId, sectionPath) {
   const piece = state.library.find(item => item.id === pieceId);
   return piece?.sections.find(section => section.path === sectionPath) || null;
+}
+
+function buildLibrary(pieces, listing) {
+  return pieces.map(piece => {
+    const folder = String(piece.path || "").replace(/^\/+|\/+$/g, "");
+    const prefix = `/${folder.toLowerCase()}/`;
+    const sections = listing.files
+      .filter(file => file.pathLower.startsWith(prefix))
+      .map(file => ({ path: file.pathDisplay.slice(prefix.length), name: file.name, type: /\.pdf$/i.test(file.name) ? "pdf" : "image", dropboxPath: file.pathDisplay }))
+      .sort((a, b) => collator.compare(a.path, b.path));
+    const error = folder && listing.folderPaths.has(`/${folder.toLowerCase()}`) ? null : `Folder “${folder}” was not found in your Dropbox app folder.`;
+    return { id: piece.id, name: piece.name, sections, error };
+  });
+}
+
+function folderSummaries(listing) {
+  return listing.topFolders
+    .map(name => ({ name, fileCount: listing.files.filter(file => file.pathLower.startsWith(`/${name.toLowerCase()}/`)).length }))
+    .sort((a, b) => collator.compare(a.name, b.name));
 }
 
 function renderPieces() {
@@ -120,6 +149,11 @@ function updatePassageNavigation() {
   $("#move-to-latest").disabled = !hasPassage || state.passageIndex >= state.passageTrail.length - 1;
 }
 
+function showMediaFallback(frame, element) {
+  if (!element.isConnected) return;
+  frame.innerHTML = '<div class="media-fallback">This score file could not be displayed. Check that it is still in Dropbox and is a valid PDF, PNG or JPEG.</div>';
+}
+
 function renderPractice() {
   const selected = state.selectedSection && sectionFor(state.selectedSection.pieceId, state.selectedSection.path);
   const validPieceCount = state.library.filter(piece => !piece.error && piece.sections.length).length;
@@ -135,25 +169,32 @@ function renderPractice() {
   $("#section-counter").textContent = `${piece.sections.indexOf(selected) + 1} of ${piece.sections.length}`;
   const frame = $("#score-frame");
   frame.replaceChildren();
+  const element = document.createElement(selected.type === "image" ? "img" : "iframe");
   if (selected.type === "image") {
-    const image = document.createElement("img");
-    image.src = selected.mediaUrl; image.alt = `${piece.name} — ${selected.name}`;
-    image.addEventListener("error", () => { frame.innerHTML = '<div class="media-fallback">This image could not be displayed. Check that the file still exists and is a valid PNG or JPEG.</div>'; });
-    frame.append(image);
+    element.alt = `${piece.name} — ${selected.name}`;
+    element.addEventListener("error", () => showMediaFallback(frame, element));
   } else {
-    const iframe = document.createElement("iframe");
-    iframe.src = selected.mediaUrl; iframe.title = `${piece.name} — ${selected.name}`;
-    iframe.setAttribute("allow", "fullscreen");
-    frame.append(iframe);
+    element.title = `${piece.name} — ${selected.name}`;
+    element.setAttribute("allow", "fullscreen");
   }
+  frame.append(element);
+  Dropbox.mediaUrl(selected.dropboxPath)
+    .then(url => { if (element.isConnected) element.src = url; })
+    .catch(error => { showMediaFallback(frame, element); if (error.signedOut) handleError(error); });
   $("#note-editor").classList.add("hidden");
   $("#note-text").value = "";
 }
 
+function applyData(data) {
+  state.pieces = data.pieces;
+  state.history = data.history;
+}
+
 async function refreshLibrary() {
-  const [config, library] = await Promise.all([api("/api/config"), api("/api/library")]);
-  state.pieces = config.pieces || [];
-  state.library = library.pieces || [];
+  const [{ data }, listing] = await Promise.all([Dropbox.readData(), Dropbox.listLibrary()]);
+  applyData(data);
+  state.library = buildLibrary(state.pieces, listing);
+  state.folders = folderSummaries(listing);
   if (!state.library.some(piece => piece.id === state.selectedPieceId && !piece.error && piece.sections.length)) {
     state.selectedPieceId = state.library.find(piece => !piece.error && piece.sections.length)?.id || "";
     state.selectedSection = null;
@@ -173,45 +214,16 @@ async function refreshLibrary() {
 
 async function loadLibrary() {
   try {
-    const [config, library] = await Promise.all([api("/api/config"), api("/api/library")]);
-    state.pieces = config.pieces || [];
-    state.library = library.pieces || [];
-    try {
-      const location = await api("/api/data-location");
-      $("#data-location-current").textContent = location.directory;
-      $("#data-location-path").value = location.directory;
-    } catch (error) {
-      $("#data-location-current").textContent = "Unavailable — restart the app";
-      $("#data-location-path").value = "";
-      showToast(`Restart the local app to use data-folder settings: ${error.message}`, true);
-    }
-    renderLibrary();
-    renderPractice();
-  } catch (error) { showToast(error.message, true); }
-}
-
-async function saveDataLocation(event) {
-  event.preventDefault();
-  const nextDirectory = $("#data-location-path").value.trim();
-  const currentDirectory = $("#data-location-current").textContent;
-  if (nextDirectory === currentDirectory) { showToast("This is already the active app data folder."); return; }
-  const accepted = confirm("Change the app data folder? If the current app-data.json exists, it will be copied to the new folder. The original will remain as a backup. The destination must not already contain app-data.json.");
-  if (!accepted) return;
-  const button = $("#save-data-location"); button.disabled = true; button.textContent = "Changing…";
-  try {
-    const result = await api("/api/data-location", { method: "PUT", body: JSON.stringify({ directory: nextDirectory }) });
-    $("#data-location-current").textContent = result.directory;
-    $("#data-location-path").value = result.directory;
     await refreshLibrary();
     renderLibrary();
-    const message = result.copiedExisting
-      ? "App data copied to the new folder. The original remains as a backup."
-      : result.adoptedExisting
-        ? "The app is now using the app-data.json you already moved."
-        : "App data folder updated.";
-    showToast(message);
-  } catch (error) { showToast(error.message, true); }
-  finally { button.disabled = false; button.textContent = "Change folder"; }
+  } catch (error) { handleError(error); }
+}
+
+async function disconnectDropbox() {
+  if (!confirm("Disconnect Dropbox on this device? Your files and history stay in Dropbox; you can connect again at any time.")) return;
+  await Dropbox.disconnect();
+  Object.assign(state, { pieces: [], library: [], history: [], folders: [], selectedPieceId: "", selectedSection: null, passageTrail: [], passageIndex: -1 });
+  showSignedOut();
 }
 
 function renderLibrary() {
@@ -243,6 +255,7 @@ function renderLibrary() {
 
 function openPieceForm(piece = null) {
   $("#piece-form").reset();
+  $("#folder-browser").classList.add("hidden");
   $("#piece-id").value = piece?.id || "";
   $("#piece-name").value = piece?.name || "";
   $("#piece-path").value = piece?.path || "";
@@ -254,39 +267,75 @@ function openPieceForm(piece = null) {
   $("#piece-form-wrap").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-function closePieceForm() { $("#piece-form-wrap").classList.add("hidden"); $("#piece-form").reset(); }
+function closePieceForm() { $("#piece-form-wrap").classList.add("hidden"); $("#folder-browser").classList.add("hidden"); $("#piece-form").reset(); }
+
+function renderFolderBrowser() {
+  const host = $("#folder-browser"); host.replaceChildren();
+  if (!state.folders.length) {
+    host.innerHTML = '<div class="empty-state compact">No folders found. In Finder, add a folder of score screenshots to your Dropbox app folder, then choose Browse again.</div>';
+    return;
+  }
+  const editingId = $("#piece-id").value;
+  state.folders.forEach(folder => {
+    const owner = state.pieces.find(piece => piece.path.toLowerCase() === folder.name.toLowerCase());
+    const taken = owner && owner.id !== editingId;
+    const button = document.createElement("button"); button.type = "button"; button.className = "folder-choice";
+    const name = document.createElement("strong"); name.textContent = folder.name;
+    const sub = document.createElement("small");
+    sub.textContent = `${folder.fileCount} file${folder.fileCount === 1 ? "" : "s"} · ${taken ? "Already added" : owner ? "This piece" : "Not added yet"}`;
+    button.append(name, sub);
+    button.disabled = !!taken;
+    button.addEventListener("click", () => {
+      $("#piece-path").value = folder.name;
+      if (!$("#piece-name").value.trim()) $("#piece-name").value = folder.name.replace(/_/g, " ").slice(0, 120);
+      host.classList.add("hidden");
+    });
+    host.append(button);
+  });
+}
+
+async function toggleFolderBrowser() {
+  const host = $("#folder-browser");
+  if (!host.classList.contains("hidden")) { host.classList.add("hidden"); return; }
+  host.innerHTML = '<div class="empty-state compact">Loading folders…</div>';
+  host.classList.remove("hidden");
+  try { state.folders = folderSummaries(await Dropbox.listLibrary()); renderFolderBrowser(); }
+  catch (error) { host.classList.add("hidden"); handleError(error); }
+}
 
 async function savePiece(event) {
   event.preventDefault();
   const id = $("#piece-id").value || uniqueId();
   const piece = { id, name: $("#piece-name").value.trim(), path: $("#piece-path").value.trim() };
-  const pieces = [...state.pieces];
-  const index = pieces.findIndex(item => item.id === id);
-  if (index >= 0) pieces[index] = piece; else pieces.push(piece);
+  if (!piece.path) { showToast("Choose a folder with Browse… first.", true); return; }
+  const isEdit = state.pieces.some(item => item.id === id);
   try {
-    await api("/api/config", { method: "PUT", body: JSON.stringify({ pieces }) });
+    await Dropbox.mutate(data => {
+      const index = data.pieces.findIndex(item => item.id === id);
+      if (index >= 0) data.pieces[index] = piece; else data.pieces.push(piece);
+    });
     closePieceForm();
     await refreshLibrary();
     renderLibrary();
-    showToast(index >= 0 ? "Piece settings updated." : "Piece added to your library.");
-  } catch (error) { showToast(error.message, true); }
+    showToast(isEdit ? "Piece settings updated." : "Piece added to your library.");
+  } catch (error) { handleError(error); }
 }
 
 async function removePiece(id) {
   const piece = state.pieces.find(item => item.id === id);
   if (!piece || !confirm(`Remove “${piece.name}” from this app? Your files will not be deleted. Existing history entries will remain.`)) return;
   try {
-    await api("/api/config", { method: "PUT", body: JSON.stringify({ pieces: state.pieces.filter(item => item.id !== id) }) });
+    await Dropbox.mutate(data => { data.pieces = data.pieces.filter(item => item.id !== id); });
     if (state.selectedPieceId === id) { state.selectedPieceId = ""; state.selectedSection = null; }
     await refreshLibrary(); renderLibrary();
     showToast("Piece removed. Your score files were not changed.");
-  } catch (error) { showToast(error.message, true); }
+  } catch (error) { handleError(error); }
 }
 
 async function loadHistory() {
   try {
-    const result = await api("/api/history"); state.history = result.history || []; renderHistory();
-  } catch (error) { showToast(error.message, true); }
+    const { data } = await Dropbox.readData(); applyData(data); renderHistory();
+  } catch (error) { handleError(error); }
 }
 
 function renderHistory() {
@@ -336,8 +385,10 @@ async function reopenHistory(event) {
 
 async function deleteHistory(id) {
   if (!confirm("Delete this practice history entry?")) return;
-  try { await api(`/api/history/${encodeURIComponent(id)}`, { method: "DELETE" }); await loadHistory(); showToast("History entry deleted."); }
-  catch (error) { showToast(error.message, true); }
+  try {
+    applyData(await Dropbox.mutate(data => { data.history = data.history.filter(event => event.id !== id); }));
+    renderHistory(); showToast("History entry deleted.");
+  } catch (error) { handleError(error); }
 }
 
 function exportHistory() {
@@ -352,15 +403,16 @@ async function importHistory(event) {
     const parsed = JSON.parse(await file.text());
     const entries = Array.isArray(parsed) ? parsed : parsed.history;
     if (!Array.isArray(entries)) throw new Error("This file does not contain a Meadowmount history list.");
-    const existingIds = new Set(state.history.map(item => item.id));
-    const pieceNames = new Map(state.pieces.map(piece => [piece.id, piece.name]));
-    const cleaned = entries.filter(item => item && typeof item === "object" && typeof item.sectionPath === "string" && typeof item.note === "string")
-      .map(item => ({ id: existingIds.has(item.id) ? uniqueId() : (item.id || uniqueId()), timestamp: item.timestamp || new Date().toISOString(), pieceId: item.pieceId || "", pieceName: pieceNames.get(item.pieceId) || item.pieceName || "Imported piece", sectionPath: item.sectionPath, sectionName: item.sectionName || item.sectionPath.split("/").pop(), note: item.note.slice(0, 10000) }));
-    if (!cleaned.length) throw new Error("No valid history entries were found.");
-    const merged = [...cleaned, ...state.history].slice(0, 5000);
-    await api("/api/history/import", { method: "POST", body: JSON.stringify({ history: merged }) });
-    await loadHistory(); showToast(`${cleaned.length} history entr${cleaned.length === 1 ? "y" : "ies"} imported.`);
-  } catch (error) { showToast(error.message, true); }
+    const valid = entries.filter(item => item && typeof item === "object" && typeof item.sectionPath === "string" && typeof item.note === "string");
+    if (!valid.length) throw new Error("No valid history entries were found.");
+    applyData(await Dropbox.mutate(data => {
+      const existingIds = new Set(data.history.map(item => item.id));
+      const pieceNames = new Map(data.pieces.map(piece => [piece.id, piece.name]));
+      const cleaned = valid.map(item => ({ id: existingIds.has(item.id) ? uniqueId() : (item.id || uniqueId()), timestamp: item.timestamp || localTimestamp(), pieceId: item.pieceId || "", pieceName: pieceNames.get(item.pieceId) || item.pieceName || "Imported piece", sectionPath: item.sectionPath, sectionName: item.sectionName || item.sectionPath.split("/").pop(), note: item.note.slice(0, 10000) }));
+      data.history = [...cleaned, ...data.history];
+    }));
+    renderHistory(); showToast(`${valid.length} history entr${valid.length === 1 ? "y" : "ies"} imported.`);
+  } catch (error) { handleError(error); }
 }
 
 function openNoteEditor() {
@@ -372,14 +424,23 @@ function openNoteEditor() {
   $("#note-editor").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+// Adds a practice entry for the given passage, re-checking the piece against the latest saved data.
+function recordPractice(pieceId, section, note) {
+  return Dropbox.mutate(data => {
+    const piece = data.pieces.find(item => item.id === pieceId);
+    if (!piece) throw new Error("That piece is no longer configured.");
+    data.history.unshift({ id: uniqueId(), timestamp: localTimestamp(), pieceId, pieceName: piece.name, sectionPath: section.path, sectionName: section.name, note: note.slice(0, 10000) });
+  });
+}
+
 async function saveNote() {
   const selected = state.selectedSection && sectionFor(state.selectedSection.pieceId, state.selectedSection.path);
   if (!selected) return;
   const button = $("#save-note"); button.disabled = true; button.textContent = "Saving…";
   try {
-    await api("/api/history", { method: "POST", body: JSON.stringify({ pieceId: state.selectedSection.pieceId, sectionPath: selected.path, note: $("#note-text").value }) });
+    applyData(await recordPractice(state.selectedSection.pieceId, selected, $("#note-text").value));
     $("#note-editor").classList.add("hidden"); $("#note-text").value = ""; showToast("Practice session saved to your history.");
-  } catch (error) { showToast(error.message, true); }
+  } catch (error) { handleError(error); }
   finally { button.disabled = false; button.textContent = "Save practice note"; }
 }
 
@@ -392,28 +453,35 @@ async function logAndPracticeNext() {
   button.disabled = true;
   button.textContent = "Saving practice…";
   try {
-    await api("/api/history", { method: "POST", body: JSON.stringify({ pieceId: current.pieceId, sectionPath: selected.path, note: "" }) });
+    applyData(await recordPractice(current.pieceId, selected, ""));
     const next = piece.sections[Math.floor(Math.random() * piece.sections.length)];
     setPassage(piece.id, next.path, true, true);
     showToast("Passage logged. Here’s another section to practice.");
   } catch (error) {
-    showToast(error.message, true);
+    handleError(error);
   } finally {
     button.disabled = false;
     button.innerHTML = '✓ <span>Log passage and practice next</span>';
   }
 }
 
+async function connectDropbox() {
+  try { await Dropbox.connect(); } catch (error) { handleError(error); }
+}
+
 function wireEvents() {
   $$(".nav-button").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
+  $("#toast").addEventListener("click", () => $("#toast").classList.remove("show"));
+  $("#connect-dropbox").addEventListener("click", connectDropbox);
+  $("#disconnect-dropbox").addEventListener("click", disconnectDropbox);
   $("#go-library").addEventListener("click", () => showView("library"));
   $("#add-piece-shortcut").addEventListener("click", () => { showView("library"); openPieceForm(); });
   $("#empty-add-piece").addEventListener("click", () => { showView("library"); openPieceForm(); });
   $("#new-piece").addEventListener("click", () => openPieceForm());
   $("#cancel-piece").addEventListener("click", closePieceForm);
   $("#cancel-piece-secondary").addEventListener("click", closePieceForm);
+  $("#browse-folders").addEventListener("click", toggleFolderBrowser);
   $("#piece-form").addEventListener("submit", savePiece);
-  $("#data-location-form").addEventListener("submit", saveDataLocation);
   $("#practice-next").addEventListener("click", () => chooseRandomSection(state.library.find(piece => piece.id === state.selectedPieceId)));
   $("#log-and-next").addEventListener("click", logAndPracticeNext);
   $("#passage-back").addEventListener("click", () => navigatePassage(state.passageIndex - 1));
@@ -430,12 +498,16 @@ function wireEvents() {
 async function start() {
   wireEvents();
   try {
-    const session = await api("/api/session"); state.token = session.token;
+    if (await Dropbox.finishConnect()) showToast("Dropbox connected.");
+  } catch (error) { handleError(error); }
+  if (!Dropbox.isConnected()) { showSignedOut(); return; }
+  document.body.classList.remove("signed-out");
+  showView("practice");
+  try {
     await refreshLibrary();
-    await loadHistory();
-    if (state.selectedPieceId && !state.selectedSection) chooseRandomSection(state.library.find(piece => piece.id === state.selectedPieceId));
+    renderHistory();
   } catch (error) {
-    showToast(`Could not connect to the local app: ${error.message}`, true);
+    handleError(error);
   }
 }
 

@@ -4,12 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f6f8f1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://*.dropboxusercontent.com; frame-src https://*.dropboxusercontent.com; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Meadowmount">
   <title>Meadowmount Practice</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/data-settings.css">
-  <script src="/app.js" defer></script>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js" defer></script>
+  <script src="dropbox.js" defer></script>
+  <script src="app.js" defer></script>
 </head>
-<body>
+<body class="signed-out">
   <header class="topbar">
     <a class="brand" href="#practice" aria-label="Meadowmount Practice home">
       <span class="brand-mark" aria-hidden="true">M</span>
@@ -20,11 +25,19 @@
       <button class="nav-button" data-view="history">History</button>
       <button class="nav-button" data-view="library">Pieces &amp; folders</button>
     </nav>
-    <span class="local-pill"><span></span> Saved on this computer</span>
+    <span class="local-pill"><span></span> Synced with Dropbox</span>
   </header>
 
   <main class="app-shell">
-    <section id="practice-view" class="view active" aria-labelledby="practice-heading">
+    <section id="connect-view" class="view active" aria-labelledby="connect-heading">
+      <div class="card welcome-card">
+        <div class="welcome-icon" aria-hidden="true">♫</div><p class="eyebrow">WELCOME</p><h2 id="connect-heading">Connect your Dropbox to practise.</h2>
+        <p>Your score screenshots and practice history live in this app’s own folder in Dropbox, so the same library works on your iPad and your Mac. The app can only see that one folder.</p>
+        <button class="button button-primary" id="connect-dropbox" type="button">Connect Dropbox</button>
+      </div>
+    </section>
+
+    <section id="practice-view" class="view" aria-labelledby="practice-heading">
       <div class="page-heading">
         <div><p class="eyebrow">YOUR DAILY PRACTICE</p><h1 id="practice-heading">Find your next passage.</h1><p class="subheading">Choose a piece, then let chance pick a section to work on.</p></div>
         <button class="button button-secondary" id="go-library">Set up pieces <span aria-hidden="true">→</span></button>
@@ -38,7 +51,7 @@
         <section class="score-column" aria-label="Practice section">
           <div id="score-empty" class="card welcome-card">
             <div class="welcome-icon" aria-hidden="true">♫</div><p class="eyebrow">A LITTLE PRACTICE, OFTEN</p><h2>Your music, one section at a time.</h2>
-            <p>Add a piece and point it to a folder of PDF, PNG, or JPEG score pages. They stay in their folder; this app keeps track of your practice.</p>
+            <p>Add a piece and choose its folder of PDF, PNG, or JPEG score pages in Dropbox. They stay in their folder; this app keeps track of your practice.</p>
             <button class="button button-primary" id="empty-add-piece">Configure your first piece</button>
           </div>
           <div id="score-workspace" class="hidden">
@@ -72,24 +85,20 @@
     </section>
 
     <section id="library-view" class="view" aria-labelledby="library-heading">
-      <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC LIBRARY</p><h1 id="library-heading">Pieces &amp; folders.</h1><p class="subheading">Give each piece a name and point it to its local folder of score pages.</p></div><button class="button button-primary" id="new-piece">＋ Add a piece</button></div>
-      <div class="library-notice"><span class="notice-icon" aria-hidden="true">i</span><p><strong>Files stay where they are.</strong> Add the full folder path for each piece. Supported files: PDF, PNG, JPG, JPEG. Piece settings and practice history are stored in your configured app data folder.</p></div>
-      <section class="card data-location-card" aria-labelledby="data-location-heading">
-        <div class="note-heading"><div><p class="eyebrow">LOCAL STORAGE</p><h2 id="data-location-heading">App data folder</h2></div></div>
-        <p class="data-location-current">Current location: <strong id="data-location-current">Loading…</strong></p>
-        <form id="data-location-form">
-          <label class="field-label" for="data-location-path">Change location <span>Choose an existing folder on this computer.</span></label>
-          <div class="data-location-controls"><input id="data-location-path" maxlength="4096" required placeholder="e.g. /Users/you/Library/Mobile Documents/com~apple~CloudDocs/Meadowmount Data"><button class="button button-secondary" type="submit" id="save-data-location">Change folder</button></div>
-            <p class="path-help">Enter the folder path, not the app-data.json filename. Existing app data is copied when possible; if you already moved app-data.json here, the app can use that file. Choose an iCloud Drive folder if you want iCloud to sync this data file.</p>
-        </form>
+      <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC LIBRARY</p><h1 id="library-heading">Pieces &amp; folders.</h1><p class="subheading">Give each piece a name and choose its folder of score pages.</p></div><button class="button button-primary" id="new-piece">＋ Add a piece</button></div>
+      <div class="library-notice"><span class="notice-icon" aria-hidden="true">i</span><p><strong>Files stay where they are.</strong> Each piece is a folder inside this app’s Dropbox folder (Dropbox › Apps › your app name). Supported files: PDF, PNG, JPG, JPEG. Piece settings and practice history are saved there in app-data.json.</p></div>
+      <section class="card data-location-card" aria-labelledby="dropbox-heading">
+        <div class="note-heading"><div><p class="eyebrow">STORAGE</p><h2 id="dropbox-heading">Dropbox</h2></div><button class="button button-secondary" id="disconnect-dropbox" type="button">Disconnect</button></div>
+        <p class="data-location-current">Connected on this device. To add a piece, put a folder of screenshots into the app’s Dropbox folder in Finder, then choose <strong>Add a piece</strong> and <strong>Browse…</strong>.</p>
       </section>
       <div id="piece-form-wrap" class="card piece-form-wrap hidden">
         <div class="note-heading"><div><p class="eyebrow" id="piece-form-eyebrow">NEW PIECE</p><h2 id="piece-form-title">Add a piece</h2></div><button class="icon-button" id="cancel-piece" aria-label="Cancel">×</button></div>
         <form id="piece-form">
           <input type="hidden" id="piece-id">
           <label class="field-label" for="piece-name">Display name</label><input id="piece-name" maxlength="120" required placeholder="e.g. If I Ain’t Got You">
-          <label class="field-label" for="piece-path">Folder path <span>Absolute local path to this piece’s folder.</span></label><input id="piece-path" required maxlength="4096" placeholder="e.g. /Users/you/Music/If I Ain’t Got You">
-          <p class="path-help">Tip: In Finder, select the folder and use Option-click → Copy “…” as Pathname.</p>
+          <label class="field-label" for="piece-path">Folder <span>A folder inside the app’s Dropbox folder.</span></label>
+          <div class="path-controls"><input id="piece-path" readonly placeholder="Choose a folder…"><button type="button" class="button button-secondary" id="browse-folders">Browse…</button></div>
+          <div id="folder-browser" class="folder-browser hidden"></div>
           <div class="form-footer"><button type="button" class="button button-secondary" id="cancel-piece-secondary">Cancel</button><button type="submit" class="button button-primary" id="save-piece">Save piece</button></div>
         </form>
       </div>
